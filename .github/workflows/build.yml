@@ -1,4 +1,4 @@
-name: Build Server Wechat
+name: Build Fire Case
 
 on:
   push:
@@ -44,5 +44,5 @@ jobs:
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web-scraper-linux-x86_64
-          path: fire-case/target/x86_64-unknown-linux-musl/release/fire-case
+          name: fire-case-linux-x86_64
+          path: ./target/x86_64-unknown-linux-musl/release/fire-case
