@@ -37,7 +37,7 @@ jobs:
           cargo install cargo-zigbuild
 
       - name: Build fire-case-scraper (static binary for CentOS 7)
-        working-directory: fire-case-scraper
+        working-directory: ./
         run: |
           cargo zigbuild --package fire-case-scraper --target x86_64-unknown-linux-musl --release
 
