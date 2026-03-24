@@ -192,8 +192,8 @@ async fn do_scrape_all(
                     client, &body, &extract_base_url(link),
                 ).await;
                 let body_with_imgs = replace_img_src(&body, &img_map);
-                // 对正文做内联样式处理
-                let styled = apply_inline_styles(&body_with_imgs);
+                // 对正文做内联样式处理，并将 div 替换为 p
+                let styled = div_to_p(&apply_inline_styles(&body_with_imgs));
                 chapter_bodies.push((title, styled));
             }
             Err(e) => {
@@ -224,7 +224,7 @@ async fn do_scrape(client: &Client, url: &str) -> Result<(String, String), Strin
     info!("正文 {} 字节，处理图片...", body_html.len());
     let img_map = collect_and_download_images(client, &body_html, &base_url).await;
     let replaced = replace_img_src(&body_html, &img_map);
-    let styled = apply_inline_styles(&replaced);
+    let styled = div_to_p(&apply_inline_styles(&replaced));
     let fragment = build_rich_fragment_single(&title, &styled);
 
     info!("单页完成，图片 {} 张", img_map.len());
@@ -306,7 +306,6 @@ fn apply_inline_styles(html: &str) -> String {
     // 需要补内联样式的标签及对应样式
     let rules: &[(&str, &str)] = &[
         ("p",      S_P),
-        ("div",    S_DIV),
         ("h1",     S_H1),
         ("h2",     S_H2),
         ("h3",     S_H3),
@@ -429,9 +428,43 @@ const S_P: &str =
     "font-size:14px; line-height:1.8; margin:6px 0; \
      font-family:Microsoft YaHei,SimSun,Arial,sans-serif; color:#333";
 
-const S_DIV: &str =
-    "font-size:14px; line-height:1.8; \
-     font-family:Microsoft YaHei,SimSun,Arial,sans-serif; color:#333";
+// ─────────────────────────────────────────────
+//  div → p 替换（富文本编辑器不支持 div）
+//  规则：<div ...> → <p ...>，</div> → </p>
+//  嵌套 div 也一并处理，编辑器会自动打平
+// ─────────────────────────────────────────────
+
+fn div_to_p(html: &str) -> String {
+    // 替换开标签：<div> 或 <div style="..."> 等各种形式
+    let mut result = String::with_capacity(html.len());
+    let bytes = html.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        // 检测 <div 或 <div>
+        if i + 4 <= len && &html[i..i+4] == "<div" {
+            // 确保后面是空格、> 或换行（避免误匹配 <divider> 等）
+            let next = bytes.get(i + 4).copied().unwrap_or(b'>');
+            if next == b'>' || next == b' ' || next == b'\n' || next == b'\r' || next == b'\t' {
+                result.push_str("<p");
+                i += 4;
+                continue;
+            }
+        }
+        // 检测 </div>
+        if i + 6 <= len && &html[i..i+6] == "</div>" {
+            result.push_str("</p>");
+            i += 6;
+            continue;
+        }
+        // 普通字符
+        result.push(html[i..].chars().next().unwrap_or(' '));
+        let ch_len = html[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        i += ch_len;
+    }
+    result
+}
 
 const S_TABLE: &str =
     "border-collapse:collapse; width:100%; margin:12px 0; \
