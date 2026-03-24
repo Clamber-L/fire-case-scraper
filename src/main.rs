@@ -435,33 +435,44 @@ const S_P: &str =
 // ─────────────────────────────────────────────
 
 fn div_to_p(html: &str) -> String {
-    // 替换开标签：<div> 或 <div style="..."> 等各种形式
+    // chars() イテレーションで UTF-8 バイト境界 panic を完全回避
     let mut result = String::with_capacity(html.len());
-    let bytes = html.as_bytes();
-    let len = bytes.len();
+    let chars: Vec<char> = html.chars().collect();
+    let len = chars.len();
     let mut i = 0;
 
     while i < len {
-        // 检测 <div 或 <div>
-        if i + 4 <= len && &html[i..i+4] == "<div" {
-            // 确保后面是空格、> 或换行（避免误匹配 <divider> 等）
-            let next = bytes.get(i + 4).copied().unwrap_or(b'>');
-            if next == b'>' || next == b' ' || next == b'\n' || next == b'\r' || next == b'\t' {
+        // </div> を検出（6文字）
+        if chars[i] == '<'
+            && i + 5 < len
+            && chars[i+1] == '/'
+            && chars[i+2] == 'd'
+            && chars[i+3] == 'i'
+            && chars[i+4] == 'v'
+            && chars[i+5] == '>'
+        {
+            result.push_str("</p>");
+            i += 6;
+            continue;
+        }
+
+        // <div を検出：次の文字がスペースか > のみ（<divider> 等を除外）
+        if chars[i] == '<'
+            && i + 3 < len
+            && chars[i+1] == 'd'
+            && chars[i+2] == 'i'
+            && chars[i+3] == 'v'
+        {
+            let next = chars.get(i + 4).copied().unwrap_or('>');
+            if next == '>' || next == ' ' || next == '\n' || next == '\r' || next == '\t' {
                 result.push_str("<p");
                 i += 4;
                 continue;
             }
         }
-        // 检测 </div>
-        if i + 6 <= len && &html[i..i+6] == "</div>" {
-            result.push_str("</p>");
-            i += 6;
-            continue;
-        }
-        // 普通字符
-        result.push(html[i..].chars().next().unwrap_or(' '));
-        let ch_len = html[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-        i += ch_len;
+
+        result.push(chars[i]);
+        i += 1;
     }
     result
 }
