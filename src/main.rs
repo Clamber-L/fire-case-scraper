@@ -38,14 +38,18 @@ struct ScrapeResponse {
 }
 
 #[derive(Serialize)]
+struct ChapterItem {
+    title: String,
+    content: String,
+}
+
+#[derive(Serialize)]
 struct ScrapeAllResponse {
     success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    html: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     total: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    titles: Option<Vec<String>>,
+    items: Option<Vec<ChapterItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -142,21 +146,20 @@ async fn scrape_all_handler(
     }
 
     match do_scrape_all(&state.client, &url).await {
-        Ok((all_html, titles)) => {
-            info!("✓ 全文完成，共 {} 章", titles.len());
-            let total = titles.len();
+        Ok(items) => {
+            info!("✓ 全文完成，共 {} 章", items.len());
+            let total = items.len();
             (StatusCode::OK, Json(ScrapeAllResponse {
                 success: true,
-                html: Some(all_html),
                 total: Some(total),
-                titles: Some(titles),
+                items: Some(items),
                 error: None,
             })).into_response()
         }
         Err(e) => {
             error!("✗ 全文失败: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(ScrapeAllResponse {
-                success: false, html: None, total: None, titles: None, error: Some(e),
+                success: false, total: None, items: None, error: Some(e),
             })).into_response()
         }
     }
@@ -169,47 +172,46 @@ async fn scrape_all_handler(
 async fn do_scrape_all(
     client: &Client,
     first_url: &str,
-) -> Result<(String, Vec<String>), String> {
+) -> Result<Vec<ChapterItem>, String> {
     let base_url = extract_base_url(first_url);
     let first_html = fetch_html(client, first_url).await?;
     let chapter_links = extract_chapter_links(&first_html, &base_url);
 
-    let links = if chapter_links.is_empty() {
+    let links: Vec<(String, String)> = if chapter_links.is_empty() {
         info!("侧边栏未找到章节，仅抓当前页");
-        vec![first_url.to_string()]
+        let (title, _) = parse_html(&first_html);
+        vec![(title, first_url.to_string())]
     } else {
         info!("识别到 {} 个章节", chapter_links.len());
         chapter_links
     };
 
-    let mut chapter_bodies: Vec<(String, String)> = Vec::new();
-    for (i, link) in links.iter().enumerate() {
+    let mut items: Vec<ChapterItem> = Vec::new();
+    for (i, (sidebar_title, link)) in links.iter().enumerate() {
         info!("抓取 [{}/{}] {}", i + 1, links.len(), link);
         match fetch_html(client, link).await {
             Ok(raw) => {
-                let (title, body) = parse_html(&raw);
+                let (page_title, body) = parse_html(&raw);
+                let title = if sidebar_title.is_empty() { page_title } else { sidebar_title.clone() };
                 let img_map = collect_and_download_images(
                     client, &body, &extract_base_url(link),
                 ).await;
                 let body_with_imgs = replace_img_src(&body, &img_map);
-                // 对正文做内联样式处理，并将 div 替换为 p
-                let styled = div_to_p(&apply_inline_styles(&body_with_imgs));
-                chapter_bodies.push((title, styled));
+                let content = div_to_p(&apply_inline_styles(&body_with_imgs));
+                items.push(ChapterItem { title, content });
             }
             Err(e) => {
                 warn!("章节抓取失败 {}: {}", link, e);
-                chapter_bodies.push((
-                    format!("章节 {}", i + 1),
-                    format!("<p style=\"color:#e53e3e;\">抓取失败: {}</p>", e),
-                ));
+                items.push(ChapterItem {
+                    title: sidebar_title.clone(),
+                    content: format!("<p style=\"color:#e53e3e;\">抓取失败: {}</p>", e),
+                });
             }
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
 
-    let titles: Vec<String> = chapter_bodies.iter().map(|(t, _)| t.clone()).collect();
-    let full_html = build_rich_fragment_all(&chapter_bodies);
-    Ok((full_html, titles))
+    Ok(items)
 }
 
 // ─────────────────────────────────────────────
@@ -248,49 +250,6 @@ fn build_rich_fragment_single(title: &str, body: &str) -> String {
     )
 }
 
-/// 多章节富文本片段（含目录）
-fn build_rich_fragment_all(chapters: &[(String, String)]) -> String {
-    // 目录
-    let toc_items: String = chapters.iter().enumerate()
-        .map(|(i, (title, _))| {
-            format!(
-                "<li style=\"{li}\"><a href=\"#chapter-{i}\" style=\"{a}\">{title}</a></li>",
-                li = S_TOC_LI, a = S_TOC_A, i = i, title = title,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let toc = format!(
-        "<div style=\"{wrap}\">\
-           <p style=\"{label}\">目录（共 {total} 章）</p>\
-           <ol style=\"{ol}\">{items}</ol>\
-         </div>",
-        wrap  = S_TOC_WRAP,
-        label = S_TOC_LABEL,
-        ol    = S_TOC_OL,
-        total = chapters.len(),
-        items = toc_items,
-    );
-
-    // 各章节
-    let bodies: String = chapters.iter().enumerate()
-        .map(|(i, (title, body))| {
-            format!(
-                "<h2 id=\"chapter-{i}\" style=\"{h2}\">{title}</h2>\
-                 <div style=\"{div}\">{body}</div>",
-                i    = i,
-                h2   = S_H2,
-                div  = S_CHAPTER_BODY,
-                title = title,
-                body  = body,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(&format!("<hr style=\"{}\"/>", S_HR_DASHED));
-
-    format!("{toc}{bodies}", toc = toc, bodies = bodies)
-}
 
 // ─────────────────────────────────────────────
 //  内联样式应用：把正文中的裸标签补上内联 style
@@ -510,28 +469,6 @@ const S_LI: &str =
 const S_HR: &str =
     "border:none; border-top:1px solid #e0e0e0; margin:12px 0";
 
-const S_HR_DASHED: &str =
-    "border:none; border-top:2px dashed #e0e0e0; margin:32px 0";
-
-const S_TOC_WRAP: &str =
-    "background:#f7f8fa; border-radius:6px; padding:16px 20px; \
-     margin-bottom:24px; border:1px solid #e8e8e8";
-
-const S_TOC_LABEL: &str =
-    "font-size:14px; font-weight:bold; color:#444; margin:0 0 8px";
-
-const S_TOC_OL: &str =
-    "margin:0; padding-left:20px";
-
-const S_TOC_LI: &str =
-    "margin:4px 0; font-size:13px; line-height:1.6";
-
-const S_TOC_A: &str =
-    "color:#1a73e8; text-decoration:none";
-
-const S_CHAPTER_BODY: &str =
-    "margin-bottom:8px";
-
 // ─────────────────────────────────────────────
 //  HTTP 抓取 + 编码处理
 // ─────────────────────────────────────────────
@@ -603,7 +540,7 @@ fn decode_bytes(bytes: &[u8], charset: &str) -> Result<String, String> {
 //  侧边栏链接 & HTML 解析（scraper 限定在函数内）
 // ─────────────────────────────────────────────
 
-fn extract_chapter_links(html: &str, base_url: &str) -> Vec<String> {
+fn extract_chapter_links(html: &str, base_url: &str) -> Vec<(String, String)> {
     use scraper::{Html, Selector};
     let doc = Html::parse_document(html);
 
@@ -616,14 +553,17 @@ fn extract_chapter_links(html: &str, base_url: &str) -> Vec<String> {
 
     for sel_str in &selectors {
         if let Ok(sel) = Selector::parse(sel_str) {
-            let links: Vec<String> = doc
+            let links: Vec<(String, String)> = doc
                 .select(&sel)
-                .filter_map(|el| el.value().attr("href"))
-                .map(|href| to_absolute(href, base_url))
-                .collect::<Vec<_>>()
-                .into_iter()
+                .filter_map(|el| {
+                    el.value().attr("href").map(|href| {
+                        let title = el.text().collect::<String>().trim().to_string();
+                        let url = to_absolute(href, base_url);
+                        (title, url)
+                    })
+                })
                 .fold(Vec::new(), |mut acc, x| {
-                    if !acc.contains(&x) { acc.push(x); }
+                    if !acc.iter().any(|(_, u)| u == &x.1) { acc.push(x); }
                     acc
                 });
             if !links.is_empty() {
