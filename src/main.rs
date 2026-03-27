@@ -63,6 +63,8 @@ async fn main() {
         )
         .init();
 
+
+
     let client = Client::builder()
         .use_rustls_tls()
         .danger_accept_invalid_certs(true)
