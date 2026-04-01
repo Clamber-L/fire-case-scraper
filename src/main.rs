@@ -123,9 +123,9 @@ async fn scrape_handler(
     match do_scrape(&state.client, &url).await {
         Ok((title, html)) => {
             info!("✓ 单页成功: {}", url);
-            (StatusCode::OK, Json(ScrapeResponse {
+            Json(ScrapeResponse {
                 success: true, html: Some(html), title: Some(title), error: None,
-            })).into_response()
+            }).into_response()
         }
         Err(e) => {
             error!("✗ 单页失败: {}", e);
@@ -151,12 +151,12 @@ async fn scrape_all_handler(
         Ok(items) => {
             info!("✓ 全文完成，共 {} 章", items.len());
             let total = items.len();
-            (StatusCode::OK, Json(ScrapeAllResponse {
+            Json(ScrapeAllResponse {
                 success: true,
                 total: Some(total),
                 items: Some(items),
                 error: None,
-            })).into_response()
+            }).into_response()
         }
         Err(e) => {
             error!("✗ 全文失败: {}", e);
